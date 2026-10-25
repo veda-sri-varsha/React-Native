@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +24,6 @@ const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: emailSchema,
   password: z.string().min(8).max(72),
-  inviteCode: z.string().max(200).optional(),
 });
 const loginSchema = z.object({
   email: emailSchema,
@@ -38,12 +37,6 @@ const createLeadSchema = z.object({
 }).strict().refine((lead) => Boolean(lead.email || lead.phone), {
   message: 'Provide an email address or phone number.',
 });
-
-function constantTimeEquals(left, right) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
-}
 
 export function loadConfig(env = process.env) {
   if (!env.JWT_SECRET || env.JWT_SECRET.length < 32) {
@@ -64,8 +57,6 @@ export function loadConfig(env = process.env) {
     jwtExpiresIn: '1h',
     databasePath: resolve(directory, env.DATABASE_PATH ?? './data/leads.sqlite'),
     workspaceId: env.WORKSPACE_ID ?? 'default',
-    allowPublicSignup: env.ALLOW_PUBLIC_SIGNUP === 'true',
-    signupInviteCode: env.SIGNUP_INVITE_CODE ?? '',
     allowedOrigins,
     aiApiKey: env.AI_API_KEY ?? '',
     aiEndpoint: env.AI_API_ENDPOINT ?? '',
@@ -218,15 +209,6 @@ export function createApp({
     }
     const { name, password } = parsed.data;
     const email = parsed.data.email.toLowerCase();
-
-    if (
-      !config.allowPublicSignup &&
-      (!config.signupInviteCode ||
-        !parsed.data.inviteCode ||
-        !constantTimeEquals(config.signupInviteCode, parsed.data.inviteCode))
-    ) {
-      return res.status(403).json({ error: 'A valid workspace invite code is required to create an account.' });
-    }
 
     try {
       const id = cryptoRandomId();

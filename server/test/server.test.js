@@ -12,7 +12,6 @@ import { getChallengeState } from '../growth.js';
 
 const testConfig = loadConfig({
   JWT_SECRET: 'a'.repeat(48),
-  ALLOW_PUBLIC_SIGNUP: 'true',
 });
 
 async function withApp(run, config = testConfig) {
@@ -224,19 +223,13 @@ test('challenge calculations use date-only UTC boundaries', () => {
   assert.equal(getChallengeState('2026-01-01', '2026-03-31').progressPercent, 100);
 });
 
-test('registration is closed without an invite when public signup is disabled', async () => {
+test('registration works without an invite code', async () => {
   await withApp(async ({ baseUrl }) => {
-    const response = await fetch(`${baseUrl}/api/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'Test User',
-        email: 'person@example.com',
-        password: 'correct-horse-42',
-      }),
-    });
-    assert.equal(response.status, 403);
-  }, { ...testConfig, allowPublicSignup: false, signupInviteCode: '' });
+    const { response, body } = await register(baseUrl);
+    assert.equal(response.status, 201);
+    assert.equal(body.user.email, 'person@example.com');
+    assert.equal(typeof body.token, 'string');
+  });
 });
 
 test('manual lead creation validates details, emits a live update, and stays authenticated', async () => {

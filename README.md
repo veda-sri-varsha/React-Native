@@ -25,7 +25,7 @@ Use Node.js **22.13 or newer**.
    npm --prefix server run dev
    ```
 
-   Replace the placeholder secrets in `server/.env`. Generate independent random values for `JWT_SECRET` and `SIGNUP_INVITE_CODE`; never commit `.env` files. `JWT_SECRET` must contain at least 32 characters. Registration is invite-only by default.
+   Replace the placeholder `JWT_SECRET` in `server/.env`; never commit `.env` files. It must contain at least 32 characters. Account registration is open, so use this app only where open sign-up is appropriate.
 
 3. Start Expo from the project root:
 
@@ -53,13 +53,11 @@ The backend health check is `GET /health`. SQLite is created at `server/data/lea
 | `DATABASE_PATH` | SQLite file path; defaults to `./data/leads.sqlite` relative to `server/`. |
 | `JWT_SECRET` | Private signing key for one-hour access tokens; at least 32 characters. |
 | `WORKSPACE_ID` | Workspace boundary for the existing lead inbox. |
-| `ALLOW_PUBLIC_SIGNUP` | Defaults to `false`; keep invite-only registration for shared deployments. |
-| `SIGNUP_INVITE_CODE` | Secret invite code required when public registration is disabled. |
 | `ALLOWED_ORIGINS` | Comma-separated browser origins for CORS; native mobile requests have no browser origin. |
 | `AI_API_ENDPOINT` | Optional OpenAI-compatible chat-completions endpoint. Leave unset to use local suggestions. |
 | `AI_API_KEY` | Optional private provider key. The mobile app never receives this value. |
 | `AI_MODEL` | Optional model name used by the configured endpoint. |
-Never put AI keys, JWT secrets, or invite codes in `EXPO_PUBLIC_*` variables or the mobile app.
+Never put AI keys or JWT secrets in `EXPO_PUBLIC_*` variables or the mobile app.
 
 ## Main app workflows
 

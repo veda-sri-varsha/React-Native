@@ -16,7 +16,7 @@ import { ActionButton, CRM } from '@/components/crm-ui';
 type AuthFormProps = {
   mode: 'login' | 'signup';
   notice?: string | null;
-  onSubmit: (name: string, email: string, password: string, inviteCode: string) => Promise<void>;
+  onSubmit: (name: string, email: string, password: string) => Promise<void>;
 };
 
 function Field({
@@ -71,7 +71,6 @@ export function AuthForm({ mode, notice, onSubmit }: AuthFormProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [inviteCode, setInviteCode] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -92,7 +91,7 @@ export function AuthForm({ mode, notice, onSubmit }: AuthFormProps) {
 
     setSubmitting(true);
     try {
-      await onSubmit(name.trim(), email.trim(), password, inviteCode);
+      await onSubmit(name.trim(), email.trim(), password);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : 'Unable to sign in. Please try again.');
     } finally {
@@ -137,14 +136,6 @@ export function AuthForm({ mode, notice, onSubmit }: AuthFormProps) {
                   placeholder="Your name"
                   textContentType="name"
                   value={name}
-                />
-                <Field
-                  autoComplete="off"
-                  error={fieldErrors.inviteCode}
-                  label="Workspace invite code"
-                  onChangeText={setInviteCode}
-                  placeholder="Ask your workspace administrator"
-                  value={inviteCode}
                 />
               </>
             ) : null}

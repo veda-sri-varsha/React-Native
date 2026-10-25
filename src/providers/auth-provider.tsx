@@ -15,7 +15,7 @@ type AuthContextValue = {
   user: User | null;
   sessionNotice: string | null;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (name: string, email: string, password: string, inviteCode: string) => Promise<void>;
+  signUp: (name: string, email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
 };
@@ -104,12 +104,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const signUp = useCallback(
-    (name: string, email: string, password: string, inviteCode: string) =>
+    (name: string, email: string, password: string) =>
       authenticate('/api/auth/register', {
         name: name.trim(),
         email: email.trim(),
         password,
-        inviteCode: inviteCode.trim(),
       }),
     [authenticate],
   );

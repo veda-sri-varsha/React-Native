@@ -7,9 +7,7 @@ export default function SignUpScreen() {
     <AuthForm
       mode="signup"
       notice={sessionNotice}
-      onSubmit={(name, email, password, inviteCode) =>
-        signUp(name, email, password, inviteCode)
-      }
+      onSubmit={(name, email, password) => signUp(name, email, password)}
     />
   );
 }
