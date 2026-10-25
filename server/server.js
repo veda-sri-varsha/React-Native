@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,20 @@ const loginSchema = z.object({
   email: emailSchema,
   password: z.string().min(1).max(72),
 });
+const createLeadSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  email: z.union([emailSchema, z.literal('')]).optional(),
+  phone: z.string().trim().max(40).optional(),
+  submittedAt: z.iso.datetime().optional(),
+}).strict().refine((lead) => Boolean(lead.email || lead.phone), {
+  message: 'Provide an email address or phone number.',
+});
+
+function constantTimeEquals(left, right) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
 
 export function loadConfig(env = process.env) {
   if (!env.JWT_SECRET || env.JWT_SECRET.length < 32) {
@@ -53,11 +67,6 @@ export function loadConfig(env = process.env) {
     allowPublicSignup: env.ALLOW_PUBLIC_SIGNUP === 'true',
     signupInviteCode: env.SIGNUP_INVITE_CODE ?? '',
     allowedOrigins,
-    webhookVerifyToken: env.META_WEBHOOK_VERIFY_TOKEN ?? '',
-    appSecret: env.META_APP_SECRET ?? '',
-    pageAccessToken: env.META_PAGE_ACCESS_TOKEN ?? '',
-    pageId: env.META_PAGE_ID ?? '',
-    graphApiVersion: env.META_GRAPH_API_VERSION ?? '',
     aiApiKey: env.AI_API_KEY ?? '',
     aiEndpoint: env.AI_API_ENDPOINT ?? '',
     aiModel: env.AI_MODEL ?? '',
@@ -93,14 +102,6 @@ function initializeDatabase(db) {
     CREATE INDEX IF NOT EXISTS leads_received_at_idx
       ON leads (workspace_id, received_at DESC);
 
-    CREATE TABLE IF NOT EXISTS webhook_events (
-      page_id TEXT NOT NULL,
-      lead_id TEXT NOT NULL,
-      state TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY (page_id, lead_id)
-    );
-
     CREATE TABLE IF NOT EXISTS activities (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       workspace_id TEXT NOT NULL,
@@ -132,12 +133,6 @@ function signToken(user, config) {
   );
 }
 
-function constantTimeEquals(left, right) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
-}
-
 function leadFromRow(row) {
   return {
     id: row.id,
@@ -148,53 +143,6 @@ function leadFromRow(row) {
     receivedAt: row.received_at,
     status: row.status,
   };
-}
-
-function valueFromFields(fields, names) {
-  const field = fields.find((item) => names.includes(item.name.toLowerCase()));
-  if (!field || !Array.isArray(field.values)) return null;
-  return field.values.find((value) => typeof value === 'string' && value.trim())?.trim() ?? null;
-}
-
-function isoDate(value) {
-  if (typeof value === 'number' || (typeof value === 'string' && /^\d+$/.test(value))) {
-    const milliseconds = Number(value) * 1000;
-    return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null;
-  }
-  if (typeof value !== 'string') return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-}
-
-function graphLeadFields(graphLead) {
-  const fields = Array.isArray(graphLead.field_data)
-    ? graphLead.field_data.filter(
-        (field) =>
-          field &&
-          typeof field.name === 'string' &&
-          Array.isArray(field.values),
-      )
-    : [];
-  const firstName = valueFromFields(fields, ['first_name', 'firstname']);
-  const lastName = valueFromFields(fields, ['last_name', 'lastname']);
-  const fullName =
-    valueFromFields(fields, ['full_name', 'fullname', 'name']) ??
-    [firstName, lastName].filter(Boolean).join(' ') ??
-    null;
-
-  return {
-    name: fullName,
-    email: valueFromFields(fields, ['email', 'email_address']),
-    phone: valueFromFields(fields, ['phone_number', 'phone', 'mobile_phone']),
-    submittedAt: isoDate(graphLead.created_time),
-  };
-}
-
-function verifyWebhookSignature(req, appSecret) {
-  const signature = req.get('x-hub-signature-256') ?? '';
-  if (!signature.startsWith('sha256=')) return false;
-  const expected = `sha256=${createHmac('sha256', appSecret).update(req.body).digest('hex')}`;
-  return constantTimeEquals(signature, expected);
 }
 
 function authorize(config, db) {
@@ -231,50 +179,10 @@ function authorize(config, db) {
   };
 }
 
-async function retrieveMetaLead(config, leadId, fetchImpl) {
-  if (!config.pageAccessToken || !config.graphApiVersion) {
-    const error = new Error('Meta lead retrieval is not configured.');
-    error.status = 503;
-    throw error;
-  }
-
-  const url = new URL(`https://graph.facebook.com/${config.graphApiVersion}/${encodeURIComponent(leadId)}`);
-  url.searchParams.set(
-    'fields',
-    'id,created_time,field_data,form_id,ad_id,ad_name,campaign_id,campaign_name',
-  );
-  url.searchParams.set('access_token', config.pageAccessToken);
-  let response;
-  try {
-    response = await fetchImpl(url, { signal: AbortSignal.timeout(10_000) });
-  } catch {
-    const error = new Error('Meta Graph API could not be reached.');
-    error.status = 502;
-    throw error;
-  }
-  const body = await response.json().catch(() => null);
-  if (!response.ok || !body || body.id !== leadId) {
-    const error = new Error('Meta Graph API could not retrieve this lead.');
-    error.status = response.status === 429 ? 503 : 502;
-    throw error;
-  }
-  return { id: body.id, ...graphLeadFields(body) };
-}
-
-function normalizeLeadChange(change) {
-  const value = change?.value;
-  if (!value || typeof value !== 'object') return null;
-  const leadId = value.leadgen_id ?? value.id;
-  const pageId = value.page_id;
-  if (typeof leadId !== 'string' || typeof pageId !== 'string') return null;
-  return { leadId, pageId };
-}
-
 export function createApp({
   config,
   db: injectedDb,
   io,
-  fetchImpl = globalThis.fetch,
 } = {}) {
   if (!config) throw new Error('Server configuration is required.');
   const db = injectedDb ?? createDatabase(config.databasePath);
@@ -300,158 +208,6 @@ export function createApp({
   );
 
   app.get('/health', (_req, res) => res.json({ status: 'ok' }));
-
-  app.get('/webhooks', (req, res) => {
-    const mode = req.query['hub.mode'];
-    const verifyToken = req.query['hub.verify_token'];
-    const challenge = req.query['hub.challenge'];
-    if (
-      mode === 'subscribe' &&
-      typeof verifyToken === 'string' &&
-      config.webhookVerifyToken &&
-      constantTimeEquals(verifyToken, config.webhookVerifyToken) &&
-      typeof challenge === 'string'
-    ) {
-      return res.status(200).type('text/plain').send(challenge);
-    }
-    return res.sendStatus(403);
-  });
-
-  app.post(
-    '/webhooks',
-    express.raw({ type: 'application/json', limit: '1mb' }),
-    async (req, res, next) => {
-      if (!config.appSecret) {
-        return res.status(503).json({ error: 'Meta webhook signature verification is not configured.' });
-      }
-      if (!Buffer.isBuffer(req.body) || !verifyWebhookSignature(req, config.appSecret)) {
-        return res.status(401).json({ error: 'Invalid webhook signature.' });
-      }
-
-      let notification;
-      try {
-        notification = JSON.parse(req.body.toString('utf8'));
-      } catch {
-        return res.status(400).json({ error: 'Webhook body must contain valid JSON.' });
-      }
-      if (
-        !notification ||
-        notification.object !== 'page' ||
-        !Array.isArray(notification.entry)
-      ) {
-        return res.status(400).json({ error: 'Webhook notification has an invalid format.' });
-      }
-
-      const leadChanges = [];
-      for (const entry of notification.entry) {
-        if (!entry || typeof entry.id !== 'string' || !Array.isArray(entry.changes)) continue;
-        for (const change of entry.changes) {
-          if (change?.field !== 'leadgen') continue;
-          const lead = normalizeLeadChange(change);
-          if (!lead || (change.value.page_id && change.value.page_id !== entry.id)) {
-            return res.status(400).json({ error: 'Lead notification is missing a valid page or lead ID.' });
-          }
-          leadChanges.push({ ...lead, pageId: entry.id });
-        }
-      }
-
-      if (leadChanges.length > 25) {
-        return res.status(413).json({ error: 'Too many lead notifications in one delivery.' });
-      }
-
-      try {
-        for (const lead of leadChanges) {
-          if (config.pageId && lead.pageId !== config.pageId) {
-            return res.status(403).json({ error: 'Webhook notification is for an unconfigured Page.' });
-          }
-
-          const current = db
-            .prepare('SELECT state, updated_at FROM webhook_events WHERE page_id = ? AND lead_id = ?')
-            .get(lead.pageId, lead.leadId);
-          const staleBefore = Date.now() - 2 * 60 * 1000;
-          if (current?.state === 'complete') continue;
-          if (
-            current?.state === 'processing' &&
-            new Date(current.updated_at).getTime() > staleBefore
-          ) {
-            return res.status(503).json({ error: 'Lead notification is still being processed. Retry later.' });
-          }
-
-          db.prepare(`
-            INSERT INTO webhook_events (page_id, lead_id, state, updated_at)
-            VALUES (?, ?, 'processing', ?)
-            ON CONFLICT (page_id, lead_id) DO UPDATE SET
-              state = 'processing',
-              updated_at = excluded.updated_at
-          `).run(lead.pageId, lead.leadId, new Date().toISOString());
-
-          try {
-            if (!config.pageId) {
-              const error = new Error('Meta Page configuration is missing.');
-              error.status = 503;
-              throw error;
-            }
-            const details = await retrieveMetaLead(config, lead.leadId, fetchImpl);
-            const receivedAt = new Date().toISOString();
-            const existing = db
-              .prepare('SELECT id FROM leads WHERE workspace_id = ? AND id = ?')
-              .get(config.workspaceId, details.id);
-
-            const persistLead = db.transaction(() => {
-              db.prepare(`
-                INSERT INTO leads (
-                  id, workspace_id, page_id, name, email, phone, submitted_at, received_at, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new')
-                ON CONFLICT (workspace_id, id) DO UPDATE SET
-                  page_id = excluded.page_id,
-                  name = excluded.name,
-                  email = excluded.email,
-                  phone = excluded.phone,
-                  submitted_at = excluded.submitted_at
-              `).run(
-                details.id,
-                config.workspaceId,
-                lead.pageId,
-                details.name,
-                details.email,
-                details.phone,
-                details.submittedAt,
-                receivedAt,
-              );
-              if (!existing) {
-                db.prepare(`
-                  INSERT INTO activities (workspace_id, lead_id, description, created_at)
-                  VALUES (?, ?, 'New lead received', ?)
-                `).run(config.workspaceId, details.id, receivedAt);
-              }
-              db.prepare(`
-                UPDATE webhook_events SET state = 'complete', updated_at = ?
-                WHERE page_id = ? AND lead_id = ?
-              `).run(receivedAt, lead.pageId, lead.leadId);
-            });
-            persistLead();
-
-            const socketServer = io ?? app.get('io');
-            if (!existing && socketServer) {
-              const row = db
-                .prepare('SELECT * FROM leads WHERE workspace_id = ? AND id = ?')
-                .get(config.workspaceId, details.id);
-              socketServer.to(config.workspaceId).emit('lead:new', leadFromRow(row));
-            }
-          } catch (error) {
-            db.prepare(`
-              UPDATE webhook_events SET state = 'failed', updated_at = ?
-              WHERE page_id = ? AND lead_id = ?
-            `).run(new Date().toISOString(), lead.pageId, lead.leadId);
-            throw error;
-          }
-        }
-        return res.sendStatus(200);
-      } catch (error) {
-        return next(error);
-      }
-    },
-  );
 
   app.use(express.json({ limit: '32kb' }));
 
@@ -551,7 +307,49 @@ export function createApp({
     return res.json({ leads });
   });
 
-  mountGrowthRoutes(app, { auth, db, config, fetchImpl });
+  app.post('/api/leads', auth, (req, res, next) => {
+    const parsed = createLeadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Lead details are invalid.' });
+    }
+    try {
+      const leadId = randomUUID();
+      const receivedAt = new Date().toISOString();
+      const { name, email, phone, submittedAt } = parsed.data;
+      const insertLead = db.transaction(() => {
+        db.prepare(`
+          INSERT INTO leads (
+            id, workspace_id, page_id, name, email, phone, submitted_at, received_at, status
+          ) VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, 'new')
+        `).run(
+          leadId,
+          req.user.workspace_id,
+          name,
+          email || null,
+          phone || null,
+          submittedAt ?? receivedAt,
+          receivedAt,
+        );
+        db.prepare(`
+          INSERT INTO activities (workspace_id, lead_id, description, created_at)
+          VALUES (?, ?, 'Lead added manually', ?)
+        `).run(req.user.workspace_id, leadId, receivedAt);
+      });
+      insertLead();
+
+      const lead = leadFromRow(
+        db.prepare('SELECT * FROM leads WHERE workspace_id = ? AND id = ?')
+          .get(req.user.workspace_id, leadId),
+      );
+      const socketServer = io ?? app.get('io');
+      socketServer?.to(req.user.workspace_id).emit('lead:new', lead);
+      return res.status(201).json({ lead });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  mountGrowthRoutes(app, { auth, db, config });
 
   app.use((error, _req, res, _next) => {
     const status = Number.isInteger(error?.status) ? error.status : 500;

@@ -11,7 +11,7 @@ const trackers = [
   { path: '/principles' as const, title: 'Seven principles', description: 'Turn each principle into a specific action with evidence.' },
   { path: '/exercise' as const, title: 'Exercise and wellbeing', description: 'Track sustainable movement without guilt or streak pressure.' },
   { path: '/weekly-review' as const, title: 'Weekly reflection', description: 'Review wins, blockers, and next week’s priorities.' },
-  { path: '/leads' as const, title: 'Meta lead inbox', description: 'Open your existing lead management inbox.' },
+  { path: '/leads' as const, title: 'Lead inbox', description: 'Add and manage leads in your workspace.' },
   { path: '/settings' as const, title: 'Settings and privacy', description: 'Theme, schedule, data export, and account deletion.' },
 ];
 

@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import test from 'node:test';
@@ -14,14 +13,9 @@ import { getChallengeState } from '../growth.js';
 const testConfig = loadConfig({
   JWT_SECRET: 'a'.repeat(48),
   ALLOW_PUBLIC_SIGNUP: 'true',
-  META_APP_SECRET: 'test-meta-secret',
-  META_WEBHOOK_VERIFY_TOKEN: 'test-verify-token',
-  META_PAGE_ACCESS_TOKEN: 'test-page-access-token',
-  META_PAGE_ID: 'test-page-id',
-  META_GRAPH_API_VERSION: 'v99.0',
 });
 
-async function withApp(run, fetchImpl = globalThis.fetch, config = testConfig) {
+async function withApp(run, config = testConfig) {
   const db = new Database(':memory:');
   const emitted = [];
   const io = {
@@ -33,7 +27,7 @@ async function withApp(run, fetchImpl = globalThis.fetch, config = testConfig) {
       };
     },
   };
-  const { app } = createApp({ config, db, fetchImpl, io });
+  const { app } = createApp({ config, db, io });
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -118,17 +112,14 @@ test('growth records are validated, user-private, exportable, and deletable', as
     });
     assert.equal((await privateRecords.json()).records.length, 0);
 
-    const otherUserUpdate = await fetch(
-      `${baseUrl}/api/growth/daily-actions/${record.id}`,
-      {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${second.token}`,
-        },
-        body: JSON.stringify({ status: 'completed' }),
+    const otherUserUpdate = await fetch(`${baseUrl}/api/growth/daily-actions/${record.id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${second.token}`,
       },
-    );
+      body: JSON.stringify({ status: 'completed' }),
+    });
     assert.equal(otherUserUpdate.status, 404);
 
     const invalidApplication = await fetch(`${baseUrl}/api/growth/applications`, {
@@ -145,10 +136,9 @@ test('growth records are validated, user-private, exportable, and deletable', as
     });
     assert.equal(invalidApplication.status, 400);
 
-    const dashboard = await fetch(
-      `${baseUrl}/api/growth/dashboard?date=2026-10-26`,
-      { headers: { Authorization: `Bearer ${first.token}` } },
-    );
+    const dashboard = await fetch(`${baseUrl}/api/growth/dashboard?date=2026-10-26`, {
+      headers: { Authorization: `Bearer ${first.token}` },
+    });
     const summary = await dashboard.json();
     assert.equal(summary.plannedActions, 1);
     assert.equal(summary.completionPercent, 0);
@@ -179,15 +169,13 @@ test('growth records are validated, user-private, exportable, and deletable', as
     assert.equal(updated.status, 200);
     assert.equal((await updated.json()).record.title, 'Solve two DSA problems');
 
-    const completedDashboard = await fetch(
-      `${baseUrl}/api/growth/dashboard?date=2026-10-26`,
-      { headers: { Authorization: `Bearer ${first.token}` } },
-    );
+    const completedDashboard = await fetch(`${baseUrl}/api/growth/dashboard?date=2026-10-26`, {
+      headers: { Authorization: `Bearer ${first.token}` },
+    });
     assert.equal((await completedDashboard.json()).completionPercent, 100);
-    const analytics = await fetch(
-      `${baseUrl}/api/growth/analytics?date=2026-10-26`,
-      { headers: { Authorization: `Bearer ${first.token}` } },
-    );
+    const analytics = await fetch(`${baseUrl}/api/growth/analytics?date=2026-10-26`, {
+      headers: { Authorization: `Bearer ${first.token}` },
+    });
     const analyticsData = await analytics.json();
     assert.equal(analyticsData.daily.at(-1).completedActions, 1);
     assert.equal(analyticsData.daily.at(-1).completionPercent, 100);
@@ -248,7 +236,52 @@ test('registration is closed without an invite when public signup is disabled', 
       }),
     });
     assert.equal(response.status, 403);
-  }, globalThis.fetch, { ...testConfig, allowPublicSignup: false, signupInviteCode: '' });
+  }, { ...testConfig, allowPublicSignup: false, signupInviteCode: '' });
+});
+
+test('manual lead creation validates details, emits a live update, and stays authenticated', async () => {
+  await withApp(async ({ baseUrl, emitted, db }) => {
+    assert.equal((await fetch(`${baseUrl}/api/leads`, { method: 'POST' })).status, 401);
+
+    const { body: auth } = await register(baseUrl);
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${auth.token}`,
+    };
+    const invalid = await fetch(`${baseUrl}/api/leads`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'No Contact Details' }),
+    });
+    assert.equal(invalid.status, 400);
+
+    const created = await fetch(`${baseUrl}/api/leads`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        name: 'Manual Test Lead',
+        email: 'manual@example.com',
+        phone: '+15550000000',
+      }),
+    });
+    assert.equal(created.status, 201);
+    const { lead } = await created.json();
+    assert.equal(lead.name, 'Manual Test Lead');
+    assert.equal(lead.email, 'manual@example.com');
+    assert.equal(lead.phone, '+15550000000');
+    assert.equal(lead.status, 'new');
+    assert.equal(lead.submittedAt, lead.receivedAt);
+    assert.equal(emitted.length, 1);
+    assert.equal(emitted[0].event, 'lead:new');
+    assert.equal(emitted[0].payload.id, lead.id);
+    assert.equal(emitted[0].room, 'default');
+
+    const listed = await fetch(`${baseUrl}/api/leads`, {
+      headers: { Authorization: `Bearer ${auth.token}` },
+    });
+    assert.deepEqual((await listed.json()).leads, [lead]);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM activities').get().count, 1);
+  });
 });
 
 test('Socket.IO rejects anonymous clients and broadcasts to authenticated workspace members', async () => {
@@ -289,182 +322,4 @@ test('Socket.IO rejects anonymous clients and broadcasts to authenticated worksp
     await new Promise((resolve) => io.close(resolve));
     db.close();
   }
-});
-
-test('Meta webhook verifies, retrieves, persists, emits, and deduplicates a lead', async () => {
-  let graphRequests = 0;
-  const graphFetch = async (url) => {
-    graphRequests += 1;
-    assert.match(String(url), /graph\.facebook\.com\/v99\.0\/meta-lead-1/);
-    assert.match(String(url), /access_token=test-page-access-token/);
-    return new Response(
-      JSON.stringify({
-        id: 'meta-lead-1',
-        created_time: '2026-10-25T08:00:00+0000',
-        field_data: [
-          { name: 'full_name', values: ['Actual Test Lead'] },
-          { name: 'email', values: ['lead@example.com'] },
-          { name: 'phone_number', values: ['+15550000000'] },
-        ],
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } },
-    );
-  };
-
-  await withApp(async ({ baseUrl, emitted }) => {
-    const verify = new URL(`${baseUrl}/webhooks`);
-    verify.searchParams.set('hub.mode', 'subscribe');
-    verify.searchParams.set('hub.verify_token', 'test-verify-token');
-    verify.searchParams.set('hub.challenge', 'challenge-123');
-    const verified = await fetch(verify);
-    assert.equal(verified.status, 200);
-    assert.equal(await verified.text(), 'challenge-123');
-
-    verify.searchParams.set('hub.verify_token', 'wrong-token');
-    assert.equal((await fetch(verify)).status, 403);
-
-    const { body: auth } = await register(baseUrl);
-    const payload = JSON.stringify({
-      object: 'page',
-      entry: [
-        {
-          id: 'test-page-id',
-          time: 1792953600,
-          changes: [
-            {
-              field: 'leadgen',
-              value: {
-                leadgen_id: 'meta-lead-1',
-                page_id: 'test-page-id',
-                form_id: 'test-form-id',
-                created_time: 1792915200,
-              },
-            },
-          ],
-        },
-      ],
-    });
-    const signature = `sha256=${createHmac('sha256', 'test-meta-secret')
-      .update(payload)
-      .digest('hex')}`;
-    const deliver = () =>
-      fetch(`${baseUrl}/webhooks`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Hub-Signature-256': signature,
-        },
-        body: payload,
-      });
-
-    const rejected = await fetch(`${baseUrl}/webhooks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': 'sha256=bad' },
-      body: payload,
-    });
-    assert.equal(rejected.status, 401);
-
-    assert.equal((await deliver()).status, 200);
-    assert.equal((await deliver()).status, 200);
-    assert.equal(graphRequests, 1);
-    assert.equal(emitted.length, 1);
-    assert.equal(emitted[0].room, 'default');
-    assert.equal(emitted[0].event, 'lead:new');
-    assert.equal(emitted[0].payload.name, 'Actual Test Lead');
-
-    const leads = await fetch(`${baseUrl}/api/leads`, {
-      headers: { Authorization: `Bearer ${auth.token}` },
-    });
-    const result = await leads.json();
-    assert.equal(result.leads.length, 1);
-    assert.equal(result.leads[0].email, 'lead@example.com');
-    assert.equal(result.leads[0].phone, '+15550000000');
-  }, graphFetch);
-});
-
-test('concurrent duplicate webhook deliveries are retried instead of acknowledged early', async () => {
-  let graphRequests = 0;
-  let announceStarted;
-  let finishGraph;
-  const started = new Promise((resolve) => {
-    announceStarted = resolve;
-  });
-  const blocked = new Promise((resolve) => {
-    finishGraph = resolve;
-  });
-  const graphFetch = async () => {
-    graphRequests += 1;
-    announceStarted();
-    await blocked;
-    return new Response(JSON.stringify({ id: 'concurrent-lead', field_data: [] }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  };
-
-  await withApp(async ({ baseUrl }) => {
-    const payload = JSON.stringify({
-      object: 'page',
-      entry: [
-        {
-          id: 'test-page-id',
-          changes: [
-            {
-              field: 'leadgen',
-              value: { leadgen_id: 'concurrent-lead', page_id: 'test-page-id' },
-            },
-          ],
-        },
-      ],
-    });
-    const signature = `sha256=${createHmac('sha256', 'test-meta-secret')
-      .update(payload)
-      .digest('hex')}`;
-    const deliver = () =>
-      fetch(`${baseUrl}/webhooks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': signature },
-        body: payload,
-      });
-
-    const firstDelivery = deliver();
-    await started;
-    assert.equal((await deliver()).status, 503);
-    finishGraph();
-    assert.equal((await firstDelivery).status, 200);
-    assert.equal((await deliver()).status, 200);
-    assert.equal(graphRequests, 1);
-  }, graphFetch);
-});
-
-test('webhook retries a previously failed Graph API retrieval', async () => {
-  let graphRequests = 0;
-  const flakyFetch = async () => {
-    graphRequests += 1;
-    if (graphRequests === 1) return new Response('{}', { status: 429 });
-    return new Response(JSON.stringify({ id: 'retry-lead', field_data: [] }), { status: 200 });
-  };
-  await withApp(async ({ baseUrl }) => {
-    const payload = JSON.stringify({
-      object: 'page',
-      entry: [
-        {
-          id: 'test-page-id',
-          changes: [{ field: 'leadgen', value: { leadgen_id: 'retry-lead', page_id: 'test-page-id' } }],
-        },
-      ],
-    });
-    const signature = `sha256=${createHmac('sha256', 'test-meta-secret')
-      .update(payload)
-      .digest('hex')}`;
-    const deliver = () =>
-      fetch(`${baseUrl}/webhooks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': signature },
-        body: payload,
-      });
-    assert.equal((await deliver()).status, 503);
-    assert.equal((await deliver()).status, 200);
-    assert.equal(graphRequests, 2);
-  }, flakyFetch);
 });
