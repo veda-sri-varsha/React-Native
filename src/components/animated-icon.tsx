@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import * as SplashScreen from 'expo-splash-screen';
 import { useState } from 'react';
-import { Dimensions, StyleSheet, View } from 'react-native';
+import { Dimensions, StyleSheet, Text, View } from 'react-native';
 import Animated, { Easing, Keyframe } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
@@ -33,7 +33,12 @@ export function AnimatedSplashOverlay() {
     },
   });
 
-  const image = <Image style={styles.image} source={require('@/assets/images/expo-logo.png')} />;
+  const image = (
+    <View style={styles.brandMark}>
+      <Text style={styles.brandNumber}>90</Text>
+      <Text style={styles.brandName}>LEVELUP</Text>
+    </View>
+  );
 
   return animate ? (
     <Animated.View
@@ -140,9 +145,19 @@ const styles = StyleSheet.create({
   },
   splashOverlay: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: '#208AEF',
+    backgroundColor: '#101214',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 1000,
   },
+  brandMark: {
+    alignItems: 'center',
+    backgroundColor: '#a6e46d',
+    borderRadius: 20,
+    height: 90,
+    justifyContent: 'center',
+    width: 112,
+  },
+  brandNumber: { color: '#101214', fontSize: 38, fontWeight: '900', lineHeight: 42 },
+  brandName: { color: '#101214', fontSize: 9, fontWeight: '900', letterSpacing: 2 },
 });
