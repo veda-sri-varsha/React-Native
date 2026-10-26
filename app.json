@@ -12,6 +12,8 @@
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "package": "com.levelup90.tracker",
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#101214",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -39,6 +41,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "6995c9b3-5458-4877-a056-7e81b92eddd2"
+      }
     }
   }
 }
